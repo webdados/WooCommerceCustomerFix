@@ -6,6 +6,8 @@ In that scenario Freescout core assigns the conversation's customer from the mes
 
 This module doesn't change which customer a conversation is assigned to (that's a much bigger change, with a much bigger blast radius, since customer identity is used everywhere in Freescout — out of scope for a single-purpose module). It only corrects the email(s) the WooCommerce module searches for, by detecting when the assigned customer is entirely one of the mailbox's own addresses and, if so, using the real recipient's address from the conversation's first message instead.
 
+**Temporary debug indicator:** while this fix is being validated, the module also shows a small `[DEBUG] ...` notice right under the "Recent Orders" panel whenever it overrides the email(s) used for the lookup, so it's obvious at a glance whether the fix kicked in for a given conversation (see `showDebugIndicator()` in `WooCommerceCustomerFixServiceProvider.php`). It's self-contained in this module (no WooCommerce-module changes needed for it) and only reflects the initial page render, not the sidebar's "Refresh" link. This is scaffolding, not a feature — it'll be removed once the fix is confirmed working reliably, and is **not** part of the WooCommerce-module patch proposed below.
+
 PRs are welcome.
 
 ## Requirements

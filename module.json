@@ -1,0 +1,26 @@
+{
+    "name": "WooCommerce Customer Fix",
+    "alias": "woocommercecustomerfix",
+    "description": "Fixes WooCommerce order lookups on conversations that were created by an email sent from the mailbox's own address to the real customer, with the mailbox Bcc'd (FreeScout core then wrongly assigns the mailbox's own address as the customer).",
+    "version": "1.0",
+    "detailsUrl": "",
+    "author": "Webdados - Marco Almeida",
+    "authorUrl": "https://www.webdados.pt",
+    "latestVersionUrl": "https://raw.githubusercontent.com/webdados/WooCommerceCustomerFix/main/module.json",
+    "latestVersionZipUrl": "https://github.com/webdados/WooCommerceCustomerFix/releases/latest/download/WooCommerceCustomerFix.zip",
+    "requiredAppVersion": "1.8.215",
+    "license": "AGPL-3.0",
+    "keywords": [],
+    "active": 0,
+    "order": 0,
+    "providers": [
+        "Modules\\WooCommerceCustomerFix\\Providers\\WooCommerceCustomerFixServiceProvider"
+    ],
+    "aliases": {},
+    "files": [
+        "start.php"
+    ],
+    "requires": [
+        "woocommerce"
+    ]
+}

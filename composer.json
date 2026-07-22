@@ -1,0 +1,25 @@
+{
+    "name": "webdados/woocommerce-customer-fix",
+    "description": "",
+    "authors": [
+        {
+            "name": "Webdados",
+            "email": "geral@webdados.pt"
+        }
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Modules\\WooCommerceCustomerFix\\Providers\\WooCommerceCustomerFixServiceProvider"
+            ],
+            "aliases": {
+
+            }
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\WooCommerceCustomerFix\\": ""
+        }
+    }
+}

@@ -30,6 +30,10 @@ Trusting either shape positionally would break the other call site — including
 
 Because this argument shape is themselves not something FreeScout has committed to keeping stable, `REQUIRED_APP_VERSION`/`REQUIRED_WOOCOMMERCE_VERSION` in `WooCommerceCustomerFixServiceProvider.php` pin this module to versions it's actually been verified against, and it goes inert (with a visible warning) rather than guessing on anything older or newer-but-unverified.
 
+We flagged the call-site inconsistency to the FreeScout team; their response was that call sites should type-check `conversation_id`/resolve `$customer` themselves rather than expecting the two hooks to agree, i.e. they don't plan to align the signatures. `fixCustomerEmails()` already does both, so no further action is needed on our side there.
+
+**Known limitation:** because `conversation_id` is never actually passed through to the ajax `'orders'` case anymore (dropped from `module.js`/`orders.blade.php`), `fixCustomerEmails()` can never resolve a `$conversation` on the sidebar's "Refresh" click — it always bails there. This happens to be harmless today only because the ajax request re-sends `$request->customer_emails`, which is the client's cached copy of the *already-corrected* array from the initial page render, so bailing on an already-correct value is a no-op. This is incidental, not guaranteed: if a future WooCommerce module release starts recomputing `customer_emails` server-side on that ajax path (instead of trusting the request payload) rather than reusing the value the client sent, this fix would silently stop applying on "Refresh" with no error — worth checking for if "Recent Orders" ever seems to regress specifically after clicking Refresh in a future WooCommerce module version.
+
 ## Changes previously needed on the WooCommerce module (obsolete since 1.0.18)
 
 This section is kept for historical reference — it no longer needs to be applied to any WooCommerce module version 1.0.18 or newer, since the filter now ships in the stock module (with the different signature documented above).
@@ -178,5 +182,4 @@ If either FreeScout core or the WooCommerce module is older than this module req
 No further configuration is needed.
 
 ## To do
-* Flag back to the FreeScout team that the two `woocommerce.customer_emails` call sites in 1.0.18 disagree with each other on argument order/count — worth fixing upstream even though this module now works around it.
-* Nothing else planned — open an issue or PR if you'd like something added.
+* Nothing planned — open an issue or PR if you'd like something added. (The two `woocommerce.customer_emails` call sites in 1.0.18 still disagree with each other on argument order/count; this was flagged to the FreeScout team, who responded that call sites should type-check `conversation_id` themselves and fetch `$customer` independently if needed — i.e. they don't plan to align the signatures. `fixCustomerEmails()` already does both, so no further action is needed here.)

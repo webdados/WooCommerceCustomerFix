@@ -14,12 +14,52 @@ class WooCommerceCustomerFixServiceProvider extends ServiceProvider
     protected $defer = false;
 
     /**
+     * Minimum FreeScout core version this module's assumptions about the
+     * woocommerce.customer_emails filter's calling convention have been
+     * verified against. There's no declarative way to require a minimum
+     * *module* version in module.json (only a minimum *app* version), so
+     * both this and REQUIRED_WOOCOMMERCE_VERSION are enforced at runtime
+     * in boot().
+     *
+     * @var string
+     */
+    const REQUIRED_APP_VERSION = '1.8.229';
+
+    /**
+     * Minimum WooCommerce module version required. 1.0.18 is the first
+     * release that fires the woocommerce.customer_emails filter this module
+     * depends on — but with a different (and internally inconsistent)
+     * argument order/count than originally proposed, which fixCustomerEmails()
+     * below defends against defensively rather than assuming a fixed shape.
+     *
+     * @var string
+     */
+    const REQUIRED_WOOCOMMERCE_VERSION = '1.0.18';
+
+    /**
+     * Remembers, per conversation, whether fixCustomerEmails() overrode the
+     * email(s) on this request — used only to render the temporary debug
+     * indicator below. Keyed by conversation id.
+     *
+     * @var array
+     */
+    protected static $last_result = [];
+
+    /**
      * Boot the application events.
      *
      * @return void
      */
     public function boot()
     {
+        $incompatibility = $this->checkCompatibility();
+
+        if ($incompatibility) {
+            $this->hooksIncompatible($incompatibility);
+
+            return;
+        }
+
         $this->hooks();
     }
 
@@ -34,13 +74,83 @@ class WooCommerceCustomerFixServiceProvider extends ServiceProvider
     }
 
     /**
-     * Remembers, per conversation, whether fixCustomerEmails() overrode the
-     * email(s) on this request — used only to render the temporary debug
-     * indicator below. Keyed by conversation id.
+     * Checks whether the running FreeScout core and WooCommerce module
+     * versions are ones this module's fixCustomerEmails() has been verified
+     * against. Returns a human-readable reason if not, or null if compatible.
      *
-     * @var array
+     * @return string|null
      */
-    protected static $last_result = [];
+    protected function checkCompatibility()
+    {
+        $app_version = config('app.version');
+
+        if ($app_version && version_compare($app_version, self::REQUIRED_APP_VERSION, '<')) {
+            return sprintf(
+                'requires FreeScout %s or newer (found %s).',
+                self::REQUIRED_APP_VERSION,
+                $app_version
+            );
+        }
+
+        $wc_version = $this->getWooCommerceModuleVersion();
+
+        if (!$wc_version) {
+            return 'requires the WooCommerce module to be installed.';
+        }
+
+        if (version_compare($wc_version, self::REQUIRED_WOOCOMMERCE_VERSION, '<')) {
+            return sprintf(
+                'requires the WooCommerce module %s or newer (found %s).',
+                self::REQUIRED_WOOCOMMERCE_VERSION,
+                $wc_version
+            );
+        }
+
+        return null;
+    }
+
+    /**
+     * Reads the installed WooCommerce module's own version straight out of
+     * its module.json, since FreeScout has no API to query another module's
+     * version and module.json's "requires" only checks that an alias is
+     * active, not any particular version of it.
+     *
+     * @return string|null
+     */
+    protected function getWooCommerceModuleVersion()
+    {
+        $path = base_path('Modules/WooCommerce/module.json');
+
+        if (!file_exists($path)) {
+            return null;
+        }
+
+        $data = json_decode(file_get_contents($path), true);
+
+        return $data['version'] ?? null;
+    }
+
+    /**
+     * Registered instead of hooks() when checkCompatibility() fails. Doesn't
+     * touch the woocommerce.customer_emails filter at all (the whole point
+     * is that we can't trust its shape here) — just makes it obvious, right
+     * where "Recent Orders" would otherwise appear, that this module is
+     * active but doing nothing.
+     *
+     * @param string $reason
+     * @return void
+     */
+    protected function hooksIncompatible($reason)
+    {
+        \Log::warning('[WooCommerceCustomerFix] Module is active but not functional: '.$reason);
+
+        \Eventy::addAction('conversation.after_prev_convs', function ($customer, $conversation, $mailbox) use ($reason) {
+            echo '<div class="text-danger small" style="padding:4px 15px;">'
+                .'[WooCommerce Customer Fix] Not active: '.htmlspecialchars($reason)
+                .' The "Recent Orders" email lookup below is NOT corrected.'
+                .'</div>';
+        }, 12, 3);
+    }
 
     /**
      * Module hooks.
@@ -74,16 +184,40 @@ class WooCommerceCustomerFixServiceProvider extends ServiceProvider
      * "Recent Orders" widget then searches WooCommerce for the shop's own
      * email instead of the customer's.
      *
-     * @param array               $customer_emails Emails the WooCommerce module would search for.
-     * @param \App\Customer|null  $customer        Conversation's assigned customer.
-     * @param \App\Conversation|null $conversation
-     * @param \App\Mailbox|null   $mailbox
+     * As of WooCommerce module 1.0.18, this filter's two call sites disagree
+     * with each other (and with what was originally proposed) on both the
+     * argument order and the argument count:
+     *  - conversation.after_prev_convs fires it as
+     *    ($customer_emails, $mailbox, $conversation, $customer)
+     *  - WooCommerceController::ajax()'s 'orders' case fires it as
+     *    ($customer_emails, $mailbox, $conversation_id) — only 3 args, no
+     *    $customer, and a raw scalar (or null) instead of a Conversation.
+     * So rather than binding fixed-position parameters, this identifies
+     * $mailbox/$conversation by type out of a variadic tail — that also
+     * means we never hit a PHP ArgumentCountError no matter how many extra
+     * args either call site passes.
+     *
+     * @param array $customer_emails Emails the WooCommerce module would search for.
+     * @param mixed ...$args Whatever extra context this call site passed — order and count vary, see above.
      * @return array
      */
-    public function fixCustomerEmails($customer_emails, $customer, $conversation, $mailbox)
+    public function fixCustomerEmails($customer_emails, ...$args)
     {
-        $original_customer_emails = $customer_emails;
-        $result = $this->detectRealCustomerEmails($customer_emails, $mailbox, $conversation);
+        $mailbox = null;
+        $conversation = null;
+
+        foreach ($args as $arg) {
+            if ($arg instanceof \App\Mailbox) {
+                $mailbox = $arg;
+            } elseif ($arg instanceof \App\Conversation) {
+                $conversation = $arg;
+            } elseif (!$conversation && (is_int($arg) || (is_string($arg) && ctype_digit($arg)))) {
+                $conversation = \App\Conversation::find($arg);
+            }
+        }
+
+        $original_customer_emails = collect($customer_emails)->values()->all();
+        $result = $this->detectRealCustomerEmails($original_customer_emails, $mailbox, $conversation);
 
         // TEMPORARY: remember whether we changed anything, for showDebugIndicator().
         if ($conversation) {

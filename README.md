@@ -8,22 +8,35 @@ This module doesn't change which customer a conversation is assigned to (that's 
 
 **Temporary debug indicator:** while this fix is being validated, the module also shows a small `[DEBUG] ...` notice right under the "Recent Orders" panel whenever it overrides the email(s) used for the lookup, so it's obvious at a glance whether the fix kicked in for a given conversation (see `showDebugIndicator()` in `WooCommerceCustomerFixServiceProvider.php`). It's self-contained in this module (no WooCommerce-module changes needed for it) and only reflects the initial page render, not the sidebar's "Refresh" link. This is scaffolding, not a feature — it'll be removed once the fix is confirmed working reliably, and is **not** part of the WooCommerce-module patch proposed below.
 
+**Compatibility gate:** this module checks the running FreeScout core version and the installed WooCommerce module's own version at boot, and refuses to hook anything unless both meet the minimums it's been verified against. If either is too old (or the WooCommerce module isn't installed), the module stays active but inert, and shows a visible `[WooCommerce Customer Fix] Not active: ...` notice right where "Recent Orders" would appear, so it's never silently doing nothing — see "Version compatibility" below.
+
 PRs are welcome.
 
 ## Requirements
 
-- The official **WooCommerce** module, installed and active.
-- The WooCommerce module needs to expose the `woocommerce.customer_emails` filter hook this module hooks into (see "Changes needed on the WooCommerce module" below) — **this filter does not exist in the stock module as of v1.0.16 and needs to be added**, either by applying the patch below yourself or once/if it lands upstream.
+- FreeScout core **1.8.229** or newer.
+- The official **WooCommerce** module, installed, active, and at version **1.0.18** or newer — that's the first release to fire the `woocommerce.customer_emails` filter this module hooks into. No manual patching of the WooCommerce module is needed anymore (see below).
 
-## Changes needed on the WooCommerce module
+## Version compatibility
 
-The stock WooCommerce module has no extension point around which email address(es) it searches WooCommerce for — it always uses every email cached on the conversation's assigned `Customer` record, with no way for another module to intervene. This module can't work without one.
+We originally proposed the `woocommerce.customer_emails` filter to the FreeScout team as a patch (see git history for the patch this module used to require — the section below documents what we asked for). They implemented it in the official module starting with **1.0.18**, but not with the exact signature we proposed, and not consistently between its two call sites:
 
-The patch below adds a single `woocommerce.customer_emails` filter, fired right after the WooCommerce module computes that list of email(s) and before it's used to query the store (both on initial page load and when the sidebar's "Refresh" link is clicked). It's a pure extension point: **with no third-party module hooking it, behaviour is 100% identical to the current stock module.**
+- `conversation.after_prev_convs` (initial page render) fires it as
+  `Eventy::filter('woocommerce.customer_emails', $customer_emails, $mailbox, $conversation, $customer)`.
+- `WooCommerceController::ajax()`'s `'orders'` case (the sidebar's "Refresh" link) fires it as
+  `Eventy::filter('woocommerce.customer_emails', $customer_emails, $mailbox, $conversation_id)` — only 3 args, no `$customer`, and a raw conversation ID (or `null`, since `module.js`/`orders.blade.php` no longer pass it) instead of a `Conversation` object.
 
-This is intentionally the only change proposed to the WooCommerce module — it stays generic and reusable for any similar "which email do we actually search for" correction, rather than baking this specific Bcc-detection logic into the official module.
+Trusting either shape positionally would break the other call site — including with a fatal error, not just a wrong result (see commit history for the full analysis). So `fixCustomerEmails()` no longer binds fixed-position parameters at all: it takes `($customer_emails, ...$args)` and identifies `$mailbox`/`$conversation` by `instanceof`/type out of the variadic tail, which is safe regardless of how many extra args a given FreeScout version passes.
 
-We intend to submit this patch to the Freescout/WooCommerce-module maintainers as a PR. Until it's merged (or if it never is), the four changes below need to be applied manually to your own copy of the WooCommerce module for this module to have any effect.
+Because this argument shape is themselves not something FreeScout has committed to keeping stable, `REQUIRED_APP_VERSION`/`REQUIRED_WOOCOMMERCE_VERSION` in `WooCommerceCustomerFixServiceProvider.php` pin this module to versions it's actually been verified against, and it goes inert (with a visible warning) rather than guessing on anything older or newer-but-unverified.
+
+## Changes previously needed on the WooCommerce module (obsolete since 1.0.18)
+
+This section is kept for historical reference — it no longer needs to be applied to any WooCommerce module version 1.0.18 or newer, since the filter now ships in the stock module (with the different signature documented above).
+
+The stock WooCommerce module used to have no extension point around which email address(es) it searches WooCommerce for — it always used every email cached on the conversation's assigned `Customer` record, with no way for another module to intervene.
+
+The patch below is what we submitted, and adds a single `woocommerce.customer_emails` filter, fired right after the WooCommerce module computes that list of email(s) and before it's used to query the store (both on initial page load and when the sidebar's "Refresh" link is clicked).
 
 ### Why this is safe to merge (zero impact when unused)
 
@@ -138,7 +151,7 @@ Carry the conversation id through to the ajax payload:
  		},
 ```
 
-## Filter signature
+## Filter signature (as originally proposed)
 
 ```php
 \Eventy::filter('woocommerce.customer_emails', $customer_emails, $customer, $conversation, $mailbox);
@@ -151,17 +164,19 @@ Carry the conversation id through to the ajax payload:
 | `$conversation` | `\App\Conversation\|null` | The conversation being displayed/refreshed. `null` is only possible from the ajax path if the request didn't include a valid `conversation_id`. |
 | `$mailbox` | `\App\Mailbox\|null` | The conversation's mailbox. |
 
-This is exactly what this module (`WooCommerceCustomerFix`) hooks — see `Providers/WooCommerceCustomerFixServiceProvider.php` for the actual Bcc-detection logic built on top of it.
+**This is not what shipped.** See "Version compatibility" above for the actual (and inconsistent, between call sites) shape in WooCommerce module 1.0.18+. `fixCustomerEmails()` in `Providers/WooCommerceCustomerFixServiceProvider.php` handles that reality — it doesn't assume this original signature.
 
 ## Installation
-* Apply the WooCommerce-module patch above (until/unless it's merged upstream)
+* Update the WooCommerce module to 1.0.18 or newer (no manual patching needed — see "Version compatibility" above)
 * Download the latest version of this module from this repository
 * Upload/extract to the Modules folder on your Freescout install, inside a folder named WooCommerceCustomerFix
 * Go to Manage > Settings > Tools and Clear Cache
 * Go to Modules and activate "WooCommerce Customer Fix"
 
+If either FreeScout core or the WooCommerce module is older than this module requires, activation will succeed but the module stays inert — watch for the `[WooCommerce Customer Fix] Not active: ...` notice under "Recent Orders" (see "Version compatibility" above).
+
 No further configuration is needed.
 
 ## To do
-* Submit the WooCommerce-module patch upstream to the Freescout team.
+* Flag back to the FreeScout team that the two `woocommerce.customer_emails` call sites in 1.0.18 disagree with each other on argument order/count — worth fixing upstream even though this module now works around it.
 * Nothing else planned — open an issue or PR if you'd like something added.
